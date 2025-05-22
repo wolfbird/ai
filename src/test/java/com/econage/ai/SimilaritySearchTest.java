@@ -30,7 +30,7 @@ public class SimilaritySearchTest {
     @BeforeAll
     void vector() {
         List<VectorStorePushRequest.VectorStorePushUnion> unions = new ArrayList<>();
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 50; i++) {
             var vectorStorePushUnion = new VectorStorePushRequest.VectorStorePushUnion();
             vectorStorePushUnion.setModularInnerId("unit test " + i);
             vectorStorePushUnion.setDocText("""
@@ -63,6 +63,8 @@ public class SimilaritySearchTest {
         chatCompletionRequest.setMessageId("unit test");
         chatCompletionRequest.setMaxTokens(4096L);
         chatCompletionRequest.setWithVectorStore(true);
+        chatCompletionRequest.setSimilarityThreshold(0.7d);
+        chatCompletionRequest.setTopK(21);
         var response = integrateFacadeService.chat(chatCompletionRequest);
         log.info("response {}", response);
         Assertions.assertNotNull(response);

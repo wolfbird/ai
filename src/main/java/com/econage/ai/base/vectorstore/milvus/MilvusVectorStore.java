@@ -1,12 +1,21 @@
 package com.econage.ai.base.vectorstore.milvus;
 
+import com.econage.ai.AIConst;
+import com.econage.ai.base.vectorstore.AbstractVectorStoreBuilder;
+import com.econage.ai.base.vectorstore.SearchRequest;
+import com.econage.ai.base.vectorstore.VectorStore;
+import com.econage.ai.base.vectorstore.filter.Filter;
+import com.econage.ai.base.vectorstore.filter.FilterExpressionConverter;
+import com.econage.ai.base.vectorstore.observation.AbstractObservationVectorStore;
+import com.econage.ai.base.vectorstore.observation.VectorStoreObservationContext;
+import com.econage.ai.dto.vectorstore.VectorPermissionCheckRequest;
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import io.milvus.client.MilvusServiceClient;
 import io.milvus.common.clientenum.ConsistencyLevelEnum;
 import io.milvus.grpc.DataType;
 import io.milvus.grpc.MutationResult;
-import io.milvus.grpc.SearchResults;
+import io.milvus.orm.iterator.SearchIterator;
 import io.milvus.param.IndexType;
 import io.milvus.param.MetricType;
 import io.milvus.param.R;
@@ -15,11 +24,10 @@ import io.milvus.param.RpcStatus;
 import io.milvus.param.collection.*;
 import io.milvus.param.dml.DeleteParam;
 import io.milvus.param.dml.InsertParam;
-import io.milvus.param.dml.SearchParam;
+import io.milvus.param.dml.SearchIteratorParam;
 import io.milvus.param.index.CreateIndexParam;
 import io.milvus.param.index.DropIndexParam;
 import io.milvus.response.QueryResultsWrapper.RowRecord;
-import io.milvus.response.SearchResultsWrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
@@ -28,21 +36,13 @@ import org.springframework.ai.embedding.EmbeddingOptionsBuilder;
 import org.springframework.ai.model.EmbeddingUtils;
 import org.springframework.ai.observation.conventions.VectorStoreProvider;
 import org.springframework.ai.observation.conventions.VectorStoreSimilarityMetric;
-import com.econage.ai.base.vectorstore.AbstractVectorStoreBuilder;
-import com.econage.ai.base.vectorstore.SearchRequest;
-import com.econage.ai.base.vectorstore.VectorStore;
-import com.econage.ai.base.vectorstore.filter.Filter;
-import com.econage.ai.base.vectorstore.filter.FilterExpressionConverter;
-import com.econage.ai.base.vectorstore.observation.AbstractObservationVectorStore;
-import com.econage.ai.base.vectorstore.observation.VectorStoreObservationContext;
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
+import org.springframework.web.client.RestClient;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 import java.util.stream.Collectors;
 
 /**
@@ -136,6 +136,8 @@ public class MilvusVectorStore extends AbstractObservationVectorStore implements
 
     public static final String MODULAR_INNER_ID_FIELD_NAME = "modularInnerId";
 
+    public static final String METADATA_DATASOURCE_FIELD_NAME = "docDatasource";
+
     // Metadata, automatically assigned by Milvus.
     public static final String DISTANCE_FIELD_NAME = "distance";
 
@@ -164,6 +166,8 @@ public class MilvusVectorStore extends AbstractObservationVectorStore implements
 
     private final String indexParameters;
 
+    private final RestClient restClient;
+
     /**
      * @param builder {@link VectorStore.Builder} for chroma vector store
      */
@@ -180,6 +184,7 @@ public class MilvusVectorStore extends AbstractObservationVectorStore implements
         this.indexType = builder.indexType;
         this.metricType = builder.metricType;
         this.indexParameters = builder.indexParameters;
+        this.restClient = builder.restClient;
     }
 
     /**
@@ -283,55 +288,115 @@ public class MilvusVectorStore extends AbstractObservationVectorStore implements
 
     @Override
     public List<Document> doSimilaritySearch(SearchRequest request) {
-
         String nativeFilterExpressions = (request.getFilterExpression() != null)
                 ? this.filterExpressionConverter.convertExpression(request.getFilterExpression()) : "";
 
         Assert.notNull(request.getQuery(), "Query string must not be null");
 
         float[] embedding = this.embeddingModel.embed(request.getQuery());
-
-        var searchParamBuilder = SearchParam.newBuilder()
+        long batchSize = 50L;
+        var searchParamBuilder = SearchIteratorParam.newBuilder()
                 .withDatabaseName(this.databaseName)
                 .withCollectionName(this.collectionName)
                 .withConsistencyLevel(ConsistencyLevelEnum.STRONG)
                 .withMetricType(this.metricType)
                 .withOutFields(SEARCH_OUTPUT_FIELDS)
-                .withTopK(request.getTopK())
+                .withTopK(50000)
+                .withBatchSize(batchSize)
                 .withVectors(List.of(EmbeddingUtils.toList(embedding)))
                 .withVectorFieldName(EMBEDDING_FIELD_NAME);
 
         if (StringUtils.hasText(nativeFilterExpressions)) {
             searchParamBuilder.withExpr(nativeFilterExpressions);
         }
+        Gson gson = new Gson();
+        var params = new HashMap<String, Double>();
+        if (this.metricType == MetricType.IP || this.metricType == MetricType.COSINE) {
+            params.put("radius", request.getSimilarityThreshold());
+            params.put("range_filter", 1.0d);
+        } else {
+            params.put("range_filter", 1 - request.getSimilarityThreshold());
+            params.put("radius", 1.0d);
+        }
+        searchParamBuilder.withParams(gson.toJson(params));
 
-        R<SearchResults> respSearch = this.milvusClient.search(searchParamBuilder.build());
+        R<SearchIterator> respSearch = milvusClient.searchIterator(searchParamBuilder.build());
 
         if (respSearch.getException() != null) {
             throw new RuntimeException("Search failed!", respSearch.getException());
         }
+        List<Document> documents = new ArrayList<>();
+        SearchIterator iterator = respSearch.getData();
+        while (true) {
+            List<RowRecord> records = iterator.next();
+            logger.debug("documents {}", records.size());
+            if (records.isEmpty()) {
+                iterator.close();
+                break;
+            }
+            var list = records
+                    .stream()
+                    .map(rowRecord -> {
+                        String docId = (String) rowRecord.get(DOC_ID_FIELD_NAME);
+                        String content = (String) rowRecord.get(CONTENT_FIELD_NAME);
+                        JsonElement metadata = (JsonElement) rowRecord.get(METADATA_FIELD_NAME);
+                        // inject the distance into the metadata.
+                        var metdataMap = gson.fromJson(metadata, Map.class);
+                        metdataMap.put(DISTANCE_FIELD_NAME, 1 - getResultSimilarity(rowRecord));
+                        return Document.builder()
+                                .id(docId)
+                                .text(content)
+                                .metadata(metdataMap)
+                                .score((double) getResultSimilarity(rowRecord))
+                                .build();
+                    }).toList();
+            List<String> modularIdList;
+            try {
+                modularIdList = checkDocumentsPermissions(list, String.valueOf(request.getContextValue(AIConst.E10_TOKEN_HEADER_KEY)));
+            } catch (Exception e) {
+                iterator.close();
+                logger.warn("Failed to check documents permissions", e);
+                return documents;
+            }
+            for (Document document : list.stream().filter(d -> modularIdList != null && modularIdList.contains(String.valueOf(d.getMetadata().get(MODULAR_INNER_ID_FIELD_NAME)))).toList()) {
+                documents.add(document);
+                if (documents.size() == request.getTopK()) {
+                    break;
+                }
+            }
+            if (documents.size() == request.getTopK()) {
+                iterator.close();
+                break;
+            }
+            if (batchSize > records.size()) {
+                iterator.close();
+                break;
+            }
+        }
+        return documents;
+    }
 
-        SearchResultsWrapper wrapperSearch = new SearchResultsWrapper(respSearch.getData().getResults());
-
-        Gson gson = new Gson();
-        return wrapperSearch.getRowRecords(0)
-                .stream()
-                .filter(rowRecord -> getResultSimilarity(rowRecord) >= request.getSimilarityThreshold())
-                .map(rowRecord -> {
-                    String docId = (String) rowRecord.get(DOC_ID_FIELD_NAME);
-                    String content = (String) rowRecord.get(CONTENT_FIELD_NAME);
-                    JsonElement metadata = (JsonElement) rowRecord.get(METADATA_FIELD_NAME);
-                    // inject the distance into the metadata.
-                    var metdataMap =  gson.fromJson(metadata, Map.class);
-                    metdataMap.put(DISTANCE_FIELD_NAME, 1 - getResultSimilarity(rowRecord));
-                    return Document.builder()
-                            .id(docId)
-                            .text(content)
-                            .metadata(metdataMap)
-                            .score((double) getResultSimilarity(rowRecord))
-                            .build();
+    private List<String> checkDocumentsPermissions(List<Document> documents, String tokenValue) {
+        var request = new VectorPermissionCheckRequest();
+        List<VectorPermissionCheckRequest.VectorPermissionCheckUnion> unions = new ArrayList<>();
+        documents.stream().collect(Collectors.groupingBy(d -> String.valueOf(d.getMetadata().get(METADATA_DATASOURCE_FIELD_NAME)))).forEach(
+                (key, value) -> {
+                    var union = new VectorPermissionCheckRequest.VectorPermissionCheckUnion();
+                    union.setFileSourceType(key);
+                    union.setModularInnerIds(value.stream().map(d -> String.valueOf(d.getMetadata().get(MODULAR_INNER_ID_FIELD_NAME))).collect(Collectors.toList()));
+                    unions.add(union);
+                }
+        );
+        request.setUnions(unions);
+        //rest接口调用e10判断权限
+        return restClient.post()
+                .uri("/standard/ai/integration/vector/permission-check")
+                .headers(headers -> headers.add(AIConst.E10_TOKEN_HEADER_KEY, tokenValue))
+                .body(request)
+                .retrieve()
+                .toEntity(new ParameterizedTypeReference<List<String>>() {
                 })
-                .toList();
+                .getBody();
     }
 
     private float getResultSimilarity(RowRecord rowRecord) {
@@ -448,8 +513,7 @@ public class MilvusVectorStore extends AbstractObservationVectorStore implements
             if (embeddingDimensions > 0) {
                 return embeddingDimensions;
             }
-        }
-        catch (Exception e) {
+        } catch (Exception e) {
             logger.warn("Failed to obtain the embedding dimensions from the embedding model and fall backs to default:"
                     + this.embeddingDimension, e);
         }
@@ -535,6 +599,8 @@ public class MilvusVectorStore extends AbstractObservationVectorStore implements
         private String embeddingFieldName = EMBEDDING_FIELD_NAME;
 
         private boolean initializeSchema = false;
+
+        private RestClient restClient;
 
         /**
          * @param milvusClient the Milvus service client to use for database operations
@@ -692,6 +758,11 @@ public class MilvusVectorStore extends AbstractObservationVectorStore implements
          */
         public Builder initializeSchema(boolean initializeSchema) {
             this.initializeSchema = initializeSchema;
+            return this;
+        }
+
+        public Builder restClient(RestClient restClient) {
+            this.restClient = restClient;
             return this;
         }
 

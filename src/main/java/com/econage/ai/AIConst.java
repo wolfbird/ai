@@ -10,5 +10,6 @@ public interface AIConst {
 
      String CHAT_DOCUMENT_CACHE_NAME = "CHAT_DOCUMENT_CACHE";
 
+     String E10_TOKEN_HEADER_KEY = "eco-auth-token";
 
 }

@@ -1,15 +1,18 @@
 package com.econage.ai.advisor;
 
-import org.springframework.ai.chat.client.advisor.api.*;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.prompt.PromptTemplate;
-import org.springframework.ai.document.Document;
+import com.econage.ai.AIConst;
 import com.econage.ai.base.vectorstore.SearchRequest;
 import com.econage.ai.base.vectorstore.VectorStore;
 import com.econage.ai.base.vectorstore.filter.Filter;
 import com.econage.ai.base.vectorstore.filter.FilterExpressionTextParser;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.client.advisor.api.*;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.document.Document;
 import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -24,6 +27,7 @@ import java.util.stream.Collectors;
  * @author hanpeng
  * @date 2025/3/4 11:08
  */
+@Slf4j
 public class ExtractQuestionAnswerAdvisor implements CallAroundAdvisor, StreamAroundAdvisor {
 
     public static final String RETRIEVED_DOCUMENTS = "qa_retrieved_documents";
@@ -150,8 +154,10 @@ public class ExtractQuestionAnswerAdvisor implements CallAroundAdvisor, StreamAr
 
     @Override
     public AdvisedResponse aroundCall(AdvisedRequest advisedRequest, CallAroundAdvisorChain chain) {
+        var requestAttributes = (ServletRequestAttributes) RequestContextHolder.currentRequestAttributes();
+        var tokenValue = requestAttributes.getRequest().getHeader(AIConst.E10_TOKEN_HEADER_KEY);
 
-        AdvisedRequest advisedRequest2 = before(advisedRequest);
+        AdvisedRequest advisedRequest2 = before(advisedRequest, tokenValue);
 
         AdvisedResponse advisedResponse = chain.nextAroundCall(advisedRequest2);
 
@@ -160,6 +166,8 @@ public class ExtractQuestionAnswerAdvisor implements CallAroundAdvisor, StreamAr
 
     @Override
     public Flux<AdvisedResponse> aroundStream(AdvisedRequest advisedRequest, StreamAroundAdvisorChain chain) {
+        var requestAttributes = (ServletRequestAttributes) RequestContextHolder.currentRequestAttributes();
+        var tokenValue = requestAttributes.getRequest().getHeader(AIConst.E10_TOKEN_HEADER_KEY);
 
         // This can be executed by both blocking and non-blocking Threads
         // E.g. a command line or Tomcat blocking Thread implementation
@@ -168,9 +176,9 @@ public class ExtractQuestionAnswerAdvisor implements CallAroundAdvisor, StreamAr
                 // @formatter:off
                 Mono.just(advisedRequest)
                         .publishOn(Schedulers.boundedElastic())
-                        .map(this::before)
+                        .map(req -> before(req,tokenValue))
                         .flatMapMany(request -> chain.nextAroundStream(request))
-                : chain.nextAroundStream(before(advisedRequest));
+                : chain.nextAroundStream(before(advisedRequest,tokenValue));
         // @formatter:on
 
         return advisedResponses.map(ar -> {
@@ -181,8 +189,7 @@ public class ExtractQuestionAnswerAdvisor implements CallAroundAdvisor, StreamAr
         });
     }
 
-    private AdvisedRequest before(AdvisedRequest request) {
-
+    private AdvisedRequest before(AdvisedRequest request, String token) {
         var context = new HashMap<>(request.adviseContext());
 
         // 1. Advise the system text.
@@ -195,6 +202,7 @@ public class ExtractQuestionAnswerAdvisor implements CallAroundAdvisor, StreamAr
         var searchRequestToUse = SearchRequest.from(this.searchRequest)
                 .query(request.userText().length() > 8192 ? request.userText().substring(0, 8192) : request.userText())
                 .filterExpression(doGetFilterExpression(context))
+                .context(AIConst.E10_TOKEN_HEADER_KEY, token)
                 .build();
 
         List<Document> documents = this.vectorStore.similaritySearch(searchRequestToUse);

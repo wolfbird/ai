@@ -1,5 +1,7 @@
 package com.econage.ai.base.vectorstore.milvus;
 
+import com.econage.ai.base.config.EconageSetting;
+import com.econage.ai.base.vectorstore.observation.VectorStoreObservationConvention;
 import com.econage.ai.support.strategy.EconageTokenCountBatchingStrategy;
 import io.micrometer.observation.ObservationRegistry;
 import io.milvus.client.MilvusServiceClient;
@@ -10,13 +12,13 @@ import org.springframework.ai.autoconfigure.vectorstore.milvus.MilvusServiceClie
 import org.springframework.ai.autoconfigure.vectorstore.milvus.MilvusServiceClientProperties;
 import org.springframework.ai.embedding.BatchingStrategy;
 import org.springframework.ai.embedding.EmbeddingModel;
-import com.econage.ai.base.vectorstore.observation.VectorStoreObservationConvention;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.util.StringUtils;
+import org.springframework.web.client.RestClient;
 
 import java.util.concurrent.TimeUnit;
 
@@ -25,7 +27,7 @@ import java.util.concurrent.TimeUnit;
  * @date 2025/2/18 11:11
  */
 @AutoConfiguration
-@EnableConfigurationProperties({ MilvusServiceClientProperties.class })
+@EnableConfigurationProperties({MilvusServiceClientProperties.class, EconageSetting.class})
 public class MilvusAutoConfiguration {
 
 
@@ -47,8 +49,11 @@ public class MilvusAutoConfiguration {
     public MilvusVectorStore vectorStore(MilvusServiceClient milvusClient, EmbeddingModel embeddingModel,
                                          MilvusVectorStoreProperties properties, BatchingStrategy batchingStrategy,
                                          ObjectProvider<ObservationRegistry> observationRegistry,
-                                         ObjectProvider<VectorStoreObservationConvention> customObservationConvention) {
+                                         ObjectProvider<VectorStoreObservationConvention> customObservationConvention,
+                                         EconageSetting econageSetting,
+                                         RestClient.Builder restClientBuilder) {
 
+        var restClient = restClientBuilder.baseUrl(econageSetting.getBaseUrl()).build();
         return MilvusVectorStore.builder(milvusClient, embeddingModel)
                 .collectionName(properties.getCollectionName())
                 .databaseName(properties.getDatabaseName())
@@ -60,6 +65,7 @@ public class MilvusAutoConfiguration {
                 .batchingStrategy(batchingStrategy)
                 .observationRegistry(observationRegistry.getIfUnique(() -> ObservationRegistry.NOOP))
                 .customObservationConvention(customObservationConvention.getIfAvailable(() -> null))
+                .restClient(restClient)
                 .build();
     }
 

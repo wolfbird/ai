@@ -16,13 +16,15 @@
 
 package com.econage.ai.base.vectorstore;
 
-import org.springframework.ai.document.Document;
 import com.econage.ai.base.vectorstore.filter.Filter;
 import com.econage.ai.base.vectorstore.filter.FilterExpressionBuilder;
 import com.econage.ai.base.vectorstore.filter.FilterExpressionTextParser;
+import org.springframework.ai.document.Document;
 import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -55,6 +57,8 @@ public final class SearchRequest {
 	private int topK = DEFAULT_TOP_K;
 
 	private double similarityThreshold = SIMILARITY_THRESHOLD_ACCEPT_ALL;
+
+	private Map<String, Object> context = new HashMap<>();
 
 	@Nullable
 	private Filter.Expression filterExpression;
@@ -90,6 +94,10 @@ public final class SearchRequest {
 
 	public boolean hasFilterExpression() {
 		return this.filterExpression != null;
+	}
+
+	public Object getContextValue(String key) {
+		return this.context.get(key);
 	}
 
 	@Override
@@ -274,6 +282,11 @@ public final class SearchRequest {
 		public Builder filterExpression(@Nullable String textExpression) {
 			this.searchRequest.filterExpression = (textExpression != null)
 					? new FilterExpressionTextParser().parse(textExpression) : null;
+			return this;
+		}
+
+		public Builder context(String key, Object value) {
+			this.searchRequest.context.put(key, value);
 			return this;
 		}
 
