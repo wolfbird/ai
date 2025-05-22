@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration debug="false">
+    <!--定义日志文件的存储地址 -->
+    <springProperty scope="context" name="LOG_HOME" source="ai.logging.path"/>
+
+    <!-- 按照每天生成日志文件 -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <!--日志文件输出的文件名 -->
+            <FileNamePattern>${LOG_HOME}/ai.%d{yyyy-MM-dd}_%i.log</FileNamePattern>
+            <!--日志文件保留天数和大小-->
+            <MaxFileSize>100MB</MaxFileSize>
+            <totalSizeCap>5GB</totalSizeCap>
+            <MaxHistory>15</MaxHistory>
+        </rollingPolicy>
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+            <!--格式化输出：%d表示日期，%thread表示线程名，%-5level：级别从左显示5个字符宽度%msg：日志消息，%n是换行符 -->
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50}:%L - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>INFO</level>
+        </filter>
+    </appender>
+
+    <!-- 日志输出级别 -->
+    <root level="info" additivity="false">
+        <appender-ref ref="FILE"/>
+<!--        <appender-ref ref="STDOUT"/>-->
+    </root>
+
+    <!-- 屏蔽okhttp3的log -->
+    <logger name="okhttp3" level="OFF"/>
+    <!-- 屏蔽hikari的log -->
+    <logger name="com.zaxxer.hikari" level="OFF"/>
+</configuration>

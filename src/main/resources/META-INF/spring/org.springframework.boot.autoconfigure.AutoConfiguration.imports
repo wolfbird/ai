@@ -1,0 +1,3 @@
+com.econage.ai.AIAutoConfiguration
+com.econage.ai.base.vectorstore.milvus.MilvusAutoConfiguration
+com.econage.ai.base.dashscope.embedding.DashScopeAutoConfiguration
