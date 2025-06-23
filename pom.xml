@@ -13,7 +13,7 @@
     <artifactId>ai-demo</artifactId>
     <packaging>jar</packaging>
     <modelVersion>4.0.0</modelVersion>
-    <version>${brevision}</version>
+    <version>1.0.0-SNAPSHOT</version>
 
     <!--维护自己的版本号-->
     <properties>
@@ -34,27 +34,25 @@
     </properties>
 
     <repositories>
-
-        <repository>
-            <id>innerMaven</id>
-            <name>innerMaven</name>
-            <!--<url>http://maven.econage.com:8081/repository/public/</url>-->
-            <url>http://192.168.1.237:8081/repository/public/</url>
-        </repository>
-
-        <repository>
-            <id>spring-releases</id>
-            <name>Spring Releases</name>
-            <url>https://repo.spring.io/release</url>
-
-        </repository>
         <repository>
             <id>spring-milestones</id>
             <name>Spring Milestones</name>
             <url>https://repo.spring.io/milestone</url>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
         </repository>
-
     </repositories>
+    <pluginRepositories>
+        <pluginRepository>
+            <id>spring-milestones</id>
+            <name>Spring Milestones</name>
+            <url>https://repo.spring.io/milestone</url>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </pluginRepository>
+    </pluginRepositories>
 
     <dependencies>
 
